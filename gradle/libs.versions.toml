@@ -26,6 +26,9 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 camera-core = { group = "androidx.camera", name = "camera-core", version = "1.4.1" }
 camera-two = {group = "androidx.camera", name = "camera-camera2", version = "1.4.1"}
+constraint-layout = { group = "androidx.constraintlayout", name = "constraintlayout", version = "2.2.0" }
+
+
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
