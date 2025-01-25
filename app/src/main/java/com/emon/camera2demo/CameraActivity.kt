@@ -3,7 +3,11 @@ package com.emon.camera2demo
 
 import android.content.ContentValues
 import android.graphics.SurfaceTexture
-import android.hardware.camera2.*
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
@@ -13,18 +17,30 @@ import android.provider.MediaStore
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
-import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.viewinterop.AndroidView
 
 class CameraActivity : ComponentActivity() {
 
-    private lateinit var textureView: TextureView
-    private lateinit var recordButton: Button
-    private var cameraDevice: CameraDevice? = null
+    private  var cameraDevice: CameraDevice? = null
     private lateinit var cameraCaptureSession: CameraCaptureSession
     private lateinit var mediaRecorder: MediaRecorder
-    private var isRecording = false
+    private var isRecording by mutableStateOf(false)
 
     private lateinit var previewSize: Size
     private lateinit var cameraId: String
@@ -35,32 +51,73 @@ class CameraActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.camera_activity)
-
-        textureView = findViewById(R.id.texture_view)
-        recordButton = findViewById(R.id.btn_record)
-
-        setupTextureListener()
-
-        recordButton.setOnClickListener {
-            if (isRecording) {
-                stopRecording()
-            } else {
-                startRecording()
-            }
+        setContent {
+            CameraScreen()
         }
     }
 
-    private fun setupTextureListener() {
-        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(surface: android.graphics.SurfaceTexture, width: Int, height: Int) {
-                setupCamera()
-                openCamera()
+    @Composable
+    fun CameraScreen() {
+        var textureView by remember { mutableStateOf<TextureView?>(null) }
+
+        LaunchedEffect(textureView) {
+            textureView?.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                    setupCamera()
+                    textureView?.let { openCamera(it) }
+                }
+
+                override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+                override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
             }
 
-            override fun onSurfaceTextureSizeChanged(surface: android.graphics.SurfaceTexture, width: Int, height: Int) {}
-            override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) {}
-            override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture): Boolean = true
+        }
+
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            AndroidView(
+                factory = { context ->
+                    TextureView(context).apply {
+
+                        this@apply.layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+                update = { view ->
+                    textureView = view
+                    // Ensure the listener is set after the view is initialized
+                    textureView?.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                            setupCamera()
+                            openCamera(textureView!!)
+                        }
+
+                        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
+                    }
+                }
+            )
+
+
+            Button(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                onClick = {
+                    if (isRecording) {
+                        stopRecording(textureView!!)
+                    } else {
+                        startRecording(textureView!!)
+                    }
+                }
+            ) {
+                Text(text = if (isRecording) "Stop Recording" else "Start Recording")
+            }
         }
     }
 
@@ -77,7 +134,7 @@ class CameraActivity : ComponentActivity() {
         }
     }
 
-    private fun openCamera() {
+    private fun openCamera(textureView: TextureView) {
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         try {
             if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -86,7 +143,7 @@ class CameraActivity : ComponentActivity() {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
-                    startPreview()
+                    startPreview(textureView)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -103,21 +160,24 @@ class CameraActivity : ComponentActivity() {
         }
     }
 
-    private fun startPreview() {
+    private fun startPreview(textureView: TextureView) {
         val surfaceTexture = textureView.surfaceTexture!!
         surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
         val previewSurface = Surface(surfaceTexture)
 
         try {
-            val captureRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-            captureRequestBuilder.addTarget(previewSurface)
+            val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            captureRequestBuilder?.addTarget(previewSurface)
 
-            cameraDevice!!.createCaptureSession(
+            cameraDevice?.createCaptureSession(
                 listOf(previewSurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         cameraCaptureSession = session
-                        cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, backgroundHandler)
+                        captureRequestBuilder?.build()?.let {
+                            cameraCaptureSession.setRepeatingRequest(
+                                it, null, backgroundHandler)
+                        }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -131,7 +191,7 @@ class CameraActivity : ComponentActivity() {
         }
     }
 
-    private fun startRecording() {
+    private fun startRecording(textureView: TextureView) {
         try {
             setupMediaRecorder()
             val surfaceTexture = textureView.surfaceTexture!!
@@ -139,38 +199,39 @@ class CameraActivity : ComponentActivity() {
             val previewSurface = Surface(surfaceTexture)
             val recorderSurface = mediaRecorder.surface
 
-            val captureRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-            captureRequestBuilder.addTarget(previewSurface)
-            captureRequestBuilder.addTarget(recorderSurface)
+            val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+            captureRequestBuilder?.addTarget(previewSurface)
+            captureRequestBuilder?.addTarget(recorderSurface)
 
-            cameraDevice!!.createCaptureSession(
+            cameraDevice?.createCaptureSession(
                 listOf(previewSurface, recorderSurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         cameraCaptureSession = session
-                        cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, backgroundHandler)
+                        captureRequestBuilder?.build()?.let {
+                            cameraCaptureSession.setRepeatingRequest(
+                                it, null, backgroundHandler)
+                        }
                         mediaRecorder.start()
                         isRecording = true
-                        recordButton.text = "Stop Recording"
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         Toast.makeText(this@CameraActivity, "Recording Failed", Toast.LENGTH_SHORT).show()
                     }
                 },
-                null//backgroundHandler
+                null
             )
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun stopRecording() {
+    private fun stopRecording(textureView: TextureView) {
         mediaRecorder.stop()
         mediaRecorder.reset()
-        startPreview()
+        startPreview(textureView)
         isRecording = false
-        recordButton.text = "Start Recording"
     }
 
     private fun setupMediaRecorder() {
@@ -232,3 +293,4 @@ class CameraActivity : ComponentActivity() {
         mediaRecorder.release()
     }
 }
+
